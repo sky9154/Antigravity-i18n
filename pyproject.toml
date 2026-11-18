@@ -1,0 +1,6 @@
+[project]
+name = "antigravity-zh-tw"
+version = "0.1.0"
+description = "Traditional Chinese (zh-TW) localization toolkit for Google Antigravity Desktop"
+requires-python = ">=3.12"
+dependencies = []

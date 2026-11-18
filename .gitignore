@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+dict/missing-ui.json
+dict/agy-i18n-prefs.json
+dict/.*.tmp.*
+dict/.*.bak.*

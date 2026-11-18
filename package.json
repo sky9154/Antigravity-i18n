@@ -1,0 +1,22 @@
+{
+  "name": "antigravity-zh-tw",
+  "version": "0.1.0",
+  "description": "Traditional Chinese (zh-TW) localization toolkit for Google Antigravity Desktop",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "bun run src/cli/build.ts",
+    "typecheck": "tsc --noEmit",
+    "patch": "bun run src/cli/patcher.ts apply",
+    "patch:kill": "bun run src/cli/patcher.ts apply --kill --relaunch",
+    "restore": "bun run src/cli/patcher.ts restore",
+    "kill": "bun run src/cli/patcher.ts kill",
+    "status": "bun run src/cli/patcher.ts status"
+  },
+  "devDependencies": {
+    "@electron/asar": "^3.2.18",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}
