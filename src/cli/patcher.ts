@@ -30,9 +30,51 @@ const DEFAULT_APP_DIR = path.join(
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 
 
+function resolveNativeDictPath(dictSrcDir: string, preferredLocale?: string): string | null {
+  if (preferredLocale) {
+    const candidate = path.join(dictSrcDir, preferredLocale, "native.json");
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  const localesPath = path.join(dictSrcDir, "locales.json");
+  if (fs.existsSync(localesPath)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(localesPath, "utf8")) as Record<string, unknown>;
+      for (const localeId of Object.keys(manifest)) {
+        if (localeId === "en") {
+          continue;
+        }
+        const candidate = path.join(dictSrcDir, localeId, "native.json");
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    } catch {
+    }
+  }
+
+  if (fs.existsSync(dictSrcDir)) {
+    for (const entry of fs.readdirSync(dictSrcDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const candidate = path.join(dictSrcDir, entry.name, "native.json");
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  const legacyPath = path.join(dictSrcDir, "native.json");
+  return fs.existsSync(legacyPath) ? legacyPath : null;
+}
+
+
 async function applyPatch(
   appDir: string,
-  options: { kill: boolean; relaunch: boolean }
+  options: { kill: boolean; relaunch: boolean; locale?: string }
 ): Promise<void> {
   const resourcesDir = path.join(appDir, "resources");
   const asarPath = path.join(resourcesDir, "app.asar");
@@ -79,9 +121,10 @@ async function applyPatch(
     const config: PatchConfig = { externalDictDir: dictSrcDir };
     fs.writeFileSync(path.join(targetI18nDir, "config.json"), JSON.stringify(config, null, 2), "utf8");
 
-    const nativeDict = JSON.parse(
-      fs.readFileSync(path.join(dictSrcDir, "native.json"), "utf8")
-    ) as Record<string, string>;
+    const nativeDictPath = resolveNativeDictPath(dictSrcDir, options.locale);
+    const nativeDict = nativeDictPath
+      ? (JSON.parse(fs.readFileSync(nativeDictPath, "utf8")) as Record<string, string>)
+      : {};
 
     patchStaticHtmlModules(extractDir, nativeDict);
     injectEntryFiles(extractDir, builtPreloadHook);
@@ -156,16 +199,21 @@ function parseArgs(argv: string[]): {
   appDir: string;
   kill: boolean;
   relaunch: boolean;
+  locale?: string;
 } {
   let command = "status";
   let appDir = DEFAULT_APP_DIR;
   let kill = false;
   let relaunch = false;
+  let locale: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--app-dir" && argv[i + 1]) {
       appDir = argv[i + 1];
+      i += 1;
+    } else if (arg === "--locale" && argv[i + 1]) {
+      locale = argv[i + 1];
       i += 1;
     } else if (arg === "--kill" || arg === "-k") {
       kill = true;
@@ -176,12 +224,12 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  return { command, appDir, kill, relaunch };
+  return { command, appDir, kill, relaunch, locale };
 }
 
 
 async function main(): Promise<void> {
-  const { command, appDir, kill, relaunch } = parseArgs(process.argv.slice(2));
+  const { command, appDir, kill, relaunch, locale } = parseArgs(process.argv.slice(2));
 
   if (command === "kill") {
     await ensureAntigravityStopped(appDir, true, "closing");
@@ -190,7 +238,7 @@ async function main(): Promise<void> {
   }
 
   if (command === "apply") {
-    await applyPatch(appDir, { kill, relaunch });
+    await applyPatch(appDir, { kill, relaunch, locale });
     return;
   }
 

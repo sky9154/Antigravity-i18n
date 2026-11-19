@@ -22,6 +22,14 @@ SVG_OR_GEO_RE = re.compile(
   r"^(?:(?:min|max|clamp)\(\{0\},\s*\{1\}\)|[MLQCZHVSAmlqczhvsa](?=[\s\d{])[^A-Za-z]*)$"
 )
 
+COMPACT_DURATION_RE = re.compile(
+  r"^(?:\{\d+\}(?:mo|[smhdwy])(?:\s+\{\d+\}(?:mo|[smhdwy]))*|now)$"
+)
+
+JS_NOISE_SUBSTRINGS = (
+  "${", "createElement(", "=>", "===", "!==", "window.agy", ".stepsSlice"
+)
+
 
 def read_json(path: Path) -> dict:
   raw = path.read_text(encoding="utf-8")
@@ -139,6 +147,12 @@ def is_clean_ui_string(text: str, icon_blacklist: set[str]) -> bool:
   s = text.strip()
   if not s or s in icon_blacklist:
     return False
+
+  if s.startswith((",", "}", ")", "]")) or any(sub in s for sub in JS_NOISE_SUBSTRINGS):
+    return False
+
+  if COMPACT_DURATION_RE.match(s):
+    return True
 
   if is_css_or_tailwind(s) or SVG_OR_GEO_RE.match(s) or has_unbalanced_fragment(s):
     return False

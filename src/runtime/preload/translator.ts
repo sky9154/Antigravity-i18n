@@ -18,6 +18,14 @@ interface TextTranslationRecord {
   translated: string;
 }
 
+interface LeafSegments {
+  segments: Text[][];
+  allTextNodes: Text[];
+  codeCount: number;
+}
+
+const INLINE_CODE_TAGS = new Set(["CODE", "KBD"]);
+
 
 export function createTranslatorEngine(
   initialBundle: ClientBundlePayload,
@@ -85,13 +93,19 @@ export function createTranslatorEngine(
       return;
     }
 
+    writeTranslatedTextNode(node, sourceText, next);
+  }
+
+  function writeTranslatedTextNode(node: Text, original: string, translated: string): void {
     textState.set(node, {
       locale: activeLocale,
       bundleVersion,
-      original: sourceText,
-      translated: next
+      original,
+      translated
     });
-    node.nodeValue = next;
+    if (node.nodeValue !== translated) {
+      node.nodeValue = translated;
+    }
   }
 
   function translateElementAttributes(el: Element): void {
@@ -156,6 +170,180 @@ export function createTranslatorEngine(
     }
   }
 
+  function getOriginalNodeText(node: Text): string {
+    const current = node.nodeValue ?? "";
+    const prev = textState.get(node);
+    return prev && current === prev.translated ? prev.original : current;
+  }
+
+  function isTextLeafAlreadyApplied(textNodes: Text[]): boolean {
+    if (textNodes.length === 0) {
+      return false;
+    }
+
+    for (const node of textNodes) {
+      const prev = textState.get(node);
+      if (
+        !prev ||
+        prev.locale !== activeLocale ||
+        prev.bundleVersion !== bundleVersion ||
+        prev.translated !== (node.nodeValue ?? "")
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function collectLeafSegments(el: Element): LeafSegments | null {
+    const children = Array.from(el.childNodes);
+    if (children.length < 2 || children.length > 12) {
+      return null;
+    }
+
+    const segments: Text[][] = [[]];
+    const allTextNodes: Text[] = [];
+    let codeCount = 0;
+    let nonEmptyTextCount = 0;
+
+    for (const child of children) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        const textNode = child as Text;
+        segments[segments.length - 1].push(textNode);
+        allTextNodes.push(textNode);
+        if (getOriginalNodeText(textNode).trim().length > 0) {
+          nonEmptyTextCount += 1;
+        }
+        continue;
+      }
+
+      if (child.nodeType !== Node.ELEMENT_NODE) {
+        return null;
+      }
+
+      const childEl = child as Element;
+      if (!INLINE_CODE_TAGS.has(childEl.tagName) || childEl.children.length > 0) {
+        return null;
+      }
+
+      const codeText = childEl.textContent ?? "";
+      if (!codeText.trim() || codeText.length > 60) {
+        return null;
+      }
+
+      codeCount += 1;
+      segments.push([]);
+    }
+
+    if (allTextNodes.length === 0 || (nonEmptyTextCount < 2 && codeCount === 0)) {
+      return null;
+    }
+
+    return { segments, allTextNodes, codeCount };
+  }
+
+  function applyPlainLeafTranslation(allTextNodes: Text[], combined: string): boolean {
+    if (combined.length > 360 || !/[A-Za-z]/.test(combined) || iconsIgnore.has(combined.trim())) {
+      return false;
+    }
+
+    const translated = translateWithDict(combined, exactMap, patterns);
+    if (!translated || translated === combined) {
+      return false;
+    }
+
+    let written = false;
+    for (const node of allTextNodes) {
+      const orig = getOriginalNodeText(node);
+      const isTarget = !written && orig.trim().length > 0;
+      const nextVal = isTarget ? translated : "";
+      if (isTarget) {
+        written = true;
+      }
+      writeTranslatedTextNode(node, orig, nextVal);
+    }
+
+    return written;
+  }
+
+  function applyCodeLeafTranslation(
+    segments: Text[][],
+    segmentOriginals: string[],
+    codeCount: number
+  ): boolean {
+    let probeText = segmentOriginals[0] ?? "";
+    const markers: string[] = [];
+    for (let i = 0; i < codeCount; i += 1) {
+      const marker = `\u001E${i}\u001F`;
+      markers.push(marker);
+      probeText += marker + (segmentOriginals[i + 1] ?? "");
+    }
+
+    if (probeText.length > 360 || !/[A-Za-z]/.test(probeText)) {
+      return false;
+    }
+
+    const translated = translateWithDict(probeText, exactMap, patterns);
+    if (!translated || translated === probeText) {
+      return false;
+    }
+
+    const parts: string[] = [];
+    let cursor = 0;
+    for (const marker of markers) {
+      const idx = translated.indexOf(marker, cursor);
+      if (idx === -1) {
+        return false;
+      }
+      parts.push(translated.slice(cursor, idx));
+      cursor = idx + marker.length;
+    }
+    parts.push(translated.slice(cursor));
+
+    for (let i = 0; i < parts.length; i += 1) {
+      if (parts[i].length > 0 && segments[i].length === 0) {
+        return false;
+      }
+    }
+
+    for (let i = 0; i < segments.length; i += 1) {
+      const nodes = segments[i];
+      const partText = parts[i] ?? "";
+      for (let j = 0; j < nodes.length; j += 1) {
+        const node = nodes[j];
+        writeTranslatedTextNode(node, getOriginalNodeText(node), j === 0 ? partText : "");
+      }
+    }
+
+    return true;
+  }
+
+  function translateLeafElement(el: Element): boolean {
+    if (activeLocale === "en" || isProtectedSubtreeRoot(el) || isSelfManagedNode(el)) {
+      return false;
+    }
+
+    const parsed = collectLeafSegments(el);
+    if (!parsed) {
+      return false;
+    }
+
+    if (isTextLeafAlreadyApplied(parsed.allTextNodes)) {
+      return true;
+    }
+
+    const segmentOriginals = parsed.segments.map((nodes) =>
+      nodes.map((node) => getOriginalNodeText(node)).join("")
+    );
+
+    if (parsed.codeCount === 0) {
+      return applyPlainLeafTranslation(parsed.allTextNodes, segmentOriginals[0] ?? "");
+    }
+
+    return applyCodeLeafTranslation(parsed.segments, segmentOriginals, parsed.codeCount);
+  }
+
   function scanTree(root: Node): void {
     if (isSelfManagedNode(root)) {
       return;
@@ -173,6 +361,10 @@ export function createTranslatorEngine(
         return;
       }
 
+      if (translateLeafElement(el)) {
+        return;
+      }
+
       if (el.shadowRoot) {
         observeRoot(el.shadowRoot);
         scanTree(el.shadowRoot);
@@ -185,6 +377,10 @@ export function createTranslatorEngine(
         if (node.nodeType === Node.ELEMENT_NODE) {
           const el = node as Element;
           if (isProtectedSubtreeRoot(el)) {
+            translateElementAttributes(el);
+            return NodeFilter.FILTER_REJECT;
+          }
+          if (el !== root && translateLeafElement(el)) {
             translateElementAttributes(el);
             return NodeFilter.FILTER_REJECT;
           }
@@ -278,7 +474,13 @@ export function createTranslatorEngine(
           continue;
         }
 
-        if (mutation.type === "characterData" || mutation.type === "attributes") {
+        if (mutation.type === "characterData") {
+          const parent = mutation.target.parentElement;
+          scheduleScan(parent && !isProtectedSubtreeRoot(parent) ? parent : mutation.target);
+          continue;
+        }
+
+        if (mutation.type === "attributes") {
           scheduleScan(mutation.target);
           continue;
         }
@@ -331,7 +533,23 @@ export function createTranslatorEngine(
     onAfterScan?.();
   }
 
+  function shouldCollectMissing(val: string, alreadyTranslated: boolean): boolean {
+    return (
+      !alreadyTranslated &&
+      val.length >= 2 &&
+      val.length <= 160 &&
+      /[A-Za-z]{2,}/.test(val) &&
+      !/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(val) &&
+      !iconsIgnore.has(val) &&
+      !exactMap.exact.has(val)
+    );
+  }
+
   function collectMissingStrings(): string[] {
+    if (activeLocale === "en") {
+      return [];
+    }
+
     const collected = new Set<string>();
     const root = document.body;
     if (!root) {
@@ -346,15 +564,14 @@ export function createTranslatorEngine(
         const textNode = current as Text;
         const val = (textNode.nodeValue ?? "").trim();
         const parent = textNode.parentElement;
+        const prev = textState.get(textNode);
+        const alreadyTranslated = Boolean(
+          prev && prev.locale === activeLocale && prev.translated === (textNode.nodeValue ?? "")
+        );
 
         if (
-          val.length >= 2 &&
-          val.length <= 160 &&
-          /[A-Za-z]{2,}/.test(val) &&
-          !/[\u4e00-\u9fff]/.test(val) &&
+          shouldCollectMissing(val, alreadyTranslated) &&
           !isSkippedTextElement(parent) &&
-          !iconsIgnore.has(val) &&
-          !exactMap.exact.has(val) &&
           !/^https?:\/\//i.test(val)
         ) {
           collected.add(val);
@@ -362,16 +579,15 @@ export function createTranslatorEngine(
       } else if (current.nodeType === Node.ELEMENT_NODE) {
         const el = current as Element;
         if (!isSkippedAttrElement(el)) {
+          const prevAttrs = attrState.get(el);
           for (const attr of UI_ATTRS) {
-            const val = (el.getAttribute(attr) ?? "").trim();
-            if (
-              val.length >= 2 &&
-              val.length <= 160 &&
-              /[A-Za-z]{2,}/.test(val) &&
-              !/[\u4e00-\u9fff]/.test(val) &&
-              !iconsIgnore.has(val) &&
-              !exactMap.exact.has(val)
-            ) {
+            const rawVal = el.getAttribute(attr) ?? "";
+            const val = rawVal.trim();
+            const prevAttr = prevAttrs?.get(attr);
+            const alreadyTranslated = Boolean(
+              prevAttr && prevAttr.locale === activeLocale && prevAttr.translated === rawVal
+            );
+            if (shouldCollectMissing(val, alreadyTranslated)) {
               collected.add(val);
             }
           }

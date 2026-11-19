@@ -5,5 +5,5 @@ __pycache__/
 *.pyc
 dict/missing-ui.json
 dict/agy-i18n-prefs.json
-dict/.*.tmp.*
-dict/.*.bak.*
+dict/**/.*.tmp.*
+dict/**/.*.bak.*

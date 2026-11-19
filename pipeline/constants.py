@@ -9,10 +9,11 @@ DEFAULT_APP_DIR = (
 )
 
 UI_PROP_KEYS = {
-  "label", "title", "description", "placeholder", "message", "detail", "tooltip", "aria-label",
-  "ariaLabel", "text", "header", "subtitle", "confirmText", "cancelText", "confirmLabel",
-  "cancelLabel", "emptyText", "helperText", "buttonText", "caption", "heading", "subtext", "hint",
-  "badge", "okText", "errorMessage", "successMessage", "emptyMessagePlural", "layout"
+  "label", "title", "description", "placeholder", "searchPlaceholder", "message", "detail",
+  "tooltip", "aria-label", "ariaLabel", "text", "header", "subtitle", "confirmText",
+  "cancelText", "confirmLabel", "cancelLabel", "emptyText", "helperText", "buttonText", "caption",
+  "heading", "subtext", "hint", "badge", "okText", "errorMessage", "successMessage",
+  "emptyMessagePlural", "layout"
 }
 
 ICON_PROP_KEYS = {"icon", "iconName"}

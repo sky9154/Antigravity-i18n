@@ -15,11 +15,12 @@ from .text_filters import (
 )
 
 
-BASE_CONFIG_UI_KEYS = (
-  "agy-onboarding-personas",
-  "project-4k-mode-copy",
-  "third-party-tools-disclaimer-text"
-)
+BASE_CONFIG_FIELDS: dict[str, tuple[str, ...]] = {
+  "agy-onboarding-personas": ("displayName", "description", "label"),
+  "agy-plugin-shelves": ("displayName", "description"),
+  "project-4k-mode-copy": ("title", "description"),
+  "third-party-tools-disclaimer-text": ("default", "marketplace")
+}
 
 
 def find_webui_zip_from_bytes(data: bytes) -> zipfile.ZipFile:
@@ -229,6 +230,27 @@ def extract_jsx_children(main_js: str, icon_names: Counter) -> Counter:
   for m in re.finditer(r'[{,]\s*14\s*:\s*"(?P<val>Unavailable)"', main_js):
     add_val(m.group("val"))
 
+  cond_tail_re = re.compile(
+    r""",\s*[A-Za-z_$][\w$.?()=!'" ]{1,40}\s*&&\s*"(?P<val>\s+[A-Z][^"\\\r\n]{4,180})" """.strip()
+  )
+  for m in cond_tail_re.finditer(main_js):
+    add_val(m.group("val"))
+
+  for m in re.finditer(
+    r'"(?P<head>[A-Z][^"\\\r\n]{10,180}\.)"\s*,\s*[A-Za-z_$][\w$.?()=!\'"]{1,40}\s*&&\s*"(?P<tail>\s+[A-Z][^"\\\r\n]{4,180}\.)"',
+    main_js
+  ):
+    add_val(f"{decode_js_escapes(m.group('head'))}{decode_js_escapes(m.group('tail'))}")
+
+  for m in re.finditer(r':\s*"(?P<val>No hosts in [^"\\\r\n]{3,80}\byet)"\s*\}', main_js):
+    add_val(m.group("val"))
+
+  if re.search(r'\(a\.endsWith\("second"\)\|\|a\.endsWith\("seconds"\)\)return"now"', main_js):
+    jsx_children["now"] += 1
+
+  if re.search(r'`Worked for \$\{[^}]+\}`:"Worked"', main_js):
+    add_val("Worked")
+
   return jsx_children
 
 
@@ -239,10 +261,13 @@ def extract_templates(main_js: str) -> Counter:
     r"""`\$\{[^}`]*\?\s*"(?P<p1>[A-Za-z]{2,20})"\s*:\s*"(?P<p2>[A-Za-z]{2,20})"\}\s+\$\{[^}`]+\}`"""
   )
   jsx_concat_re = re.compile(
-    r"""[,(]\s*"(?P<prefix>[A-Za-z][A-Za-z0-9\s,'-]{0,40}\s)"\s*,\s*[A-Za-z_$][\w$.?()]{1,40}\s*,\s*"(?P<suffix>\s[A-Za-z][^"\\\r\n]{0,40})"\s*[,)]"""
+    r"""[,(]\s*"(?P<prefix>[A-Za-z][A-Za-z0-9\s,'-]{0,40}\s)"\s*,\s*(?:[A-Za-z_$][\w$.?()]{1,40}(?:\?\?"[^"\\\r\n]{1,40}")?)\s*,\s*"(?P<suffix>\s[A-Za-z][^"\\\r\n]{0,40})"\s*[,)]"""
   )
   plus_concat_re = re.compile(
     r"""[,:{(]\s*"(?P<prefix>[A-Z][A-Za-z0-9\s,'-]{2,60}\s)"\s*\+\s*[A-Za-z_$][\w$.?()]{1,40}(?=\s*[,)}])"""
+  )
+  compact_dur_re = re.compile(
+    r"""`((?:\$\{[^}`]{1,40}\}(?:mo|[smhdwy])(?:\s+\$\{[^}`]{1,40}\}(?:mo|[smhdwy]))*))`"""
   )
   skip_tokens = ("http://", "https://", "px", "rgb(", "var(--", "\n  ", "import ", "export ")
 
@@ -252,6 +277,9 @@ def extract_templates(main_js: str) -> Counter:
       continue
 
     normalized = normalize_template_placeholders(raw_tpl).strip()
+    if "${" in normalized or "`" in normalized:
+      continue
+
     probe = normalized.replace("{0}", "item").replace("{1}", "item")
     if is_english_sentence_or_label(probe):
       template_hits[normalized] += 1
@@ -284,6 +312,12 @@ def extract_templates(main_js: str) -> Counter:
   if rel_match:
     for abbr in rel_match.groupdict().values():
       template_hits[f"{{0}}{abbr} ago"] += 1
+      template_hits[f"{{0}}{abbr}"] += 1
+
+  for match in compact_dur_re.finditer(main_js):
+    normalized = normalize_template_placeholders(match.group(1)).strip()
+    if normalized:
+      template_hits[normalized] += 1
 
   if re.search(r"`Resets in \$\{", main_js):
     template_hits["Resets in {0}"] += 1
@@ -296,13 +330,15 @@ def extract_embedded_base_config(ls_bytes: bytes, prop_hits: dict[str, Counter])
   if anchor < 0:
     return
 
-  start = ls_bytes.rfind(b"\n{\n", max(0, anchor - 2000), anchor)
+  start = ls_bytes.rfind(b'{\n  "base":', max(0, anchor - 20000), anchor)
   if start < 0:
-    start = ls_bytes.rfind(b"{", max(0, anchor - 500), anchor)
+    start = ls_bytes.rfind(b"\n{\n", max(0, anchor - 20000), anchor)
+  if start < 0:
+    start = ls_bytes.rfind(b"{", max(0, anchor - 2000), anchor)
   if start < 0:
     return
 
-  raw_slice = ls_bytes[start:min(len(ls_bytes), start + 120000)].decode("utf-8", errors="replace")
+  raw_slice = ls_bytes[start:min(len(ls_bytes), start + 180000)].decode("utf-8", errors="replace")
   try:
     cfg, _ = json.JSONDecoder().raw_decode(raw_slice.lstrip())
   except json.JSONDecodeError:
@@ -334,7 +370,7 @@ def extract_embedded_base_config(ls_bytes: bytes, prop_hits: dict[str, Counter])
       for item in node:
         walk_node(item, include_fields)
 
-  for key in BASE_CONFIG_UI_KEYS:
+  for key, fields in BASE_CONFIG_FIELDS.items():
     raw_val = base.get(key)
     if not isinstance(raw_val, str):
       continue
@@ -343,12 +379,92 @@ def extract_embedded_base_config(ls_bytes: bytes, prop_hits: dict[str, Counter])
     except json.JSONDecodeError:
       continue
 
-    if key == "agy-onboarding-personas":
-      walk_node(parsed, ("displayName", "description", "label"))
-    elif key == "project-4k-mode-copy":
-      walk_node(parsed, ("title", "description"))
-    elif key == "third-party-tools-disclaimer-text":
-      walk_node(parsed, ("default", "marketplace"))
+    walk_node(parsed, fields)
+
+
+def extract_swarm_html_strings(ls_bytes: bytes, swarm_counter: Counter) -> None:
+  anchor = ls_bytes.find(b'data-testid="swarm-empty-title"')
+  if anchor < 0:
+    return
+
+  win = ls_bytes[max(0, anchor - 30000):min(len(ls_bytes), anchor + 6000)].decode(
+    "utf-8", errors="replace"
+  )
+  starts = list(re.finditer(r"<!doctype\s+html", win, re.I))
+  if not starts:
+    return
+
+  html_doc = win[starts[-1].start():]
+  end_idx = html_doc.find("</html>")
+  if end_idx != -1:
+    html_doc = html_doc[:end_idx + 7]
+
+  body_idx = html_doc.find("<body")
+  body = html_doc[body_idx:] if body_idx >= 0 else html_doc
+
+  for attr_m in re.finditer(r'\b(?:title|aria-label|placeholder)="([^"]{2,160})"', body):
+    val = attr_m.group(1).strip()
+    if is_candidate_ui_text(val):
+      swarm_counter[val] += 1
+
+  for tag_m in re.finditer(
+    r">([^<>{}\r\n]{2,140})(?:</(?:button|h2|p|span|option|div|label)>|<span\b)", body
+  ):
+    val = re.sub(r"\s+", " ", tag_m.group(1)).strip()
+    if val and not re.match(r"^[0-9.×]+$", val) and is_candidate_ui_text(val):
+      swarm_counter[val] += 1
+
+
+def extract_swarm_hive_strings(
+  ls_bytes: bytes,
+  jsx_children: Counter,
+  template_hits: Counter
+) -> None:
+  hive_anchor = ls_bytes.find(b"Open this pane from a conversation")
+  if hive_anchor < 0:
+    return
+
+  hive_slice = ls_bytes[max(0, hive_anchor - 25000):min(len(ls_bytes), hive_anchor + 60000)].decode(
+    "utf-8", errors="replace"
+  )
+  body_block = re.search(
+    r"\$\('empty-body'\)\.innerHTML\s*=\s*conv\s*\?\s*(?P<b1>.*?)\s*:\s*(?P<b2>.*?'[^']*');\s*\n",
+    hive_slice,
+    re.S
+  )
+  if body_block:
+    for branch in ("b1", "b2"):
+      parts = re.findall(r"'([^'\\]*(?:\\.[^'\\]*)*)'", body_block.group(branch))
+      joined = "".join(parts)
+      normalized = re.sub(r"<code>[^<]+</code>", "{0}", joined).strip()
+      if "{0}" in normalized and is_english_sentence_or_label(normalized.replace("{0}", "cmd")):
+        template_hits[normalized] += 1
+
+  hive_patterns = (
+    r"const label = stale \? '([^']+)' : '([^']+)';",
+    r"live\.title = stale \? '([^']+)' : '([^']+)';",
+    r'title="([^"]{3,80})"',
+    r'<div class="feed-empty-title">([^<]{3,80})</div>',
+    r"aria-label',\s*replay\.playing\s*\?\s*'([^']+)'\s*:\s*'([^']+)'",
+    r"f\.setAttribute\('title',\s*'([^']+)'\)"
+  )
+  for pat in hive_patterns:
+    for m in re.finditer(pat, hive_slice):
+      for g in m.groups():
+        val = g.strip()
+        if is_candidate_ui_text(val):
+          jsx_children[val] += 1
+
+
+def extract_embedded_swarm_ui(
+  ls_bytes: bytes,
+  prop_hits: dict[str, Counter],
+  jsx_children: Counter,
+  template_hits: Counter
+) -> None:
+  swarm_counter = prop_hits.setdefault("swarm", Counter())
+  extract_swarm_html_strings(ls_bytes, swarm_counter)
+  extract_swarm_hive_strings(ls_bytes, jsx_children, template_hits)
 
 
 def extract_webui_strings(ls_path: Path) -> dict:
@@ -360,6 +476,7 @@ def extract_webui_strings(ls_path: Path) -> dict:
   extract_embedded_base_config(ls_bytes, prop_hits)
   jsx_children = extract_jsx_children(main_js, icon_names)
   template_hits = extract_templates(main_js)
+  extract_embedded_swarm_ui(ls_bytes, prop_hits, jsx_children, template_hits)
 
   return {
     "prop_hits": {

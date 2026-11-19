@@ -30,7 +30,7 @@ interface StoredPrefs {
 
 const DEFAULT_FALLBACK_LOCALE: LocaleOption = { id: "zh-TW", label: "zh-TW" };
 
-let currentLocale: UiLocale = "zh-TW";
+let currentLocale: UiLocale | null = null;
 let prefsLoaded = false;
 let cachedDicts: LoadedDictionaries | null = null;
 let bundleSeqCounter = 0;
@@ -202,21 +202,24 @@ export function getAvailableLocales(): LocaleOption[] {
     seen.add("zh-TW");
   }
 
-  if (result.length === 1) {
-    result.push(DEFAULT_FALLBACK_LOCALE);
-  }
-
   return result;
 }
 
 
+export function getDefaultLocale(): UiLocale {
+  const available = getAvailableLocales();
+  return available.find((item) => item.id !== "en")?.id ?? DEFAULT_FALLBACK_LOCALE.id;
+}
+
+
 export function normalizeLocale(candidate: unknown): UiLocale {
+  const fallback = getDefaultLocale();
   if (typeof candidate !== "string") {
-    return "zh-TW";
+    return fallback;
   }
 
   const available = getAvailableLocales();
-  return available.some((item) => item.id === candidate) ? candidate : "zh-TW";
+  return available.some((item) => item.id === candidate) ? candidate : fallback;
 }
 
 
@@ -230,11 +233,12 @@ function resolvePrefsPath(filename = "agy-i18n-prefs.json"): string {
 
 
 export function ensurePrefsLoaded(): UiLocale {
-  if (prefsLoaded) {
+  if (prefsLoaded && currentLocale !== null) {
     return currentLocale;
   }
 
   prefsLoaded = true;
+  currentLocale = getDefaultLocale();
   const primaryPath = resolvePrefsPath("agy-i18n-prefs.json");
   const targetPath = fs.existsSync(primaryPath)
     ? primaryPath
@@ -248,7 +252,7 @@ export function ensurePrefsLoaded(): UiLocale {
 
 
 export function reloadPrefsAfterReady(): boolean {
-  const prev = currentLocale;
+  const prev = currentLocale ?? getDefaultLocale();
   prefsLoaded = false;
   const loaded = ensurePrefsLoaded();
   if (loaded !== prev) {

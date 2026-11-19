@@ -1,7 +1,7 @@
 {
-  "name": "antigravity-zh-tw",
-  "version": "0.1.0",
-  "description": "Traditional Chinese (zh-TW) localization toolkit for Google Antigravity Desktop",
+  "name": "antigravity-i18n",
+  "version": "1.0.0",
+  "description": "Multi-locale runtime localization toolkit for Google Antigravity Desktop",
   "license": "MIT",
   "private": true,
   "scripts": {

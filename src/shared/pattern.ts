@@ -4,6 +4,7 @@ import type { CompiledPattern } from "./types";
 const PLACEHOLDER_RE = /\{(\d+)\}/g;
 const UNICODE_ESCAPE_RE = /\\u([0-9a-fA-F]{4})/g;
 const SURROGATE_PAIR_RE = /\\u(d[89ab][0-9a-fA-F]{2})\\u(d[c-f][0-9a-fA-F]{2})/gi;
+const COMPACT_TIME_PATTERN_RE = /^(?:\{\d+\}(?:mo|[smhdwy]))(?:\s+\{\d+\}(?:mo|[smhdwy]))*$/;
 
 const AMBIGUOUS_PATTERNS = new Set([
   "{0} and {1}",
@@ -28,7 +29,9 @@ const TRANSLATABLE_SLOT_PATTERNS = new Set([
   "Explored {0}",
   "explored {0}",
   "Searched {0}",
-  "Read {0}"
+  "Read {0}",
+  "No {0} yet",
+  "Worked for {0}"
 ]);
 
 
@@ -92,6 +95,7 @@ export function compilePatterns(raw: Record<string, string>): CompiledPattern[] 
     }
 
     const key = unescapeJsonLiterals(rawKey);
+    const isCompactTime = COMPACT_TIME_PATTERN_RE.test(key);
     const slots: number[] = [];
     let regexBody = "";
     let lastIndex = 0;
@@ -110,7 +114,11 @@ export function compilePatterns(raw: Record<string, string>): CompiledPattern[] 
 
       const prevChar = match.index > 0 ? key[match.index - 1] : "";
       const isPluralSuffix = slotIndex > 0 && /[A-Za-z]/.test(prevChar);
-      regexBody += isPluralSuffix ? "(s|es)?" : "(.+?)";
+      if (isCompactTime) {
+        regexBody += "(\\d+)";
+      } else {
+        regexBody += isPluralSuffix ? "(s|es)?" : "(.+?)";
+      }
 
       lastIndex = PLACEHOLDER_RE.lastIndex;
     }
@@ -119,7 +127,7 @@ export function compilePatterns(raw: Record<string, string>): CompiledPattern[] 
     staticLength += tail.length;
     regexBody += escapeRegex(tail);
 
-    if (slots.length === 0 || staticLength < 3) {
+    if (slots.length === 0 || (!isCompactTime && staticLength < 3)) {
       continue;
     }
 
@@ -170,7 +178,8 @@ function isUnmappedEnglishPhrase(value: string): boolean {
 function translateSinglePhrase(
   trimmed: string,
   dict: ExactLookup,
-  patterns: CompiledPattern[]
+  patterns: CompiledPattern[],
+  allowNested = true
 ): string | null {
   const exactHit = lookupExact(trimmed, dict);
   if (exactHit) {
@@ -194,10 +203,13 @@ function translateSinglePhrase(
 
     for (let i = 0; i < pattern.slots.length; i += 1) {
       const captured = match[i + 1] ?? "";
-      const translatedSlot =
-        allowSlotTranslation && captured && captured.length <= 40
-          ? lookupExact(captured.trim(), dict)
-          : undefined;
+      let translatedSlot: string | undefined;
+      if (allowSlotTranslation && captured && captured.length <= 40) {
+        const trimmedSlot = captured.trim();
+        translatedSlot = allowNested
+          ? (translateSinglePhrase(trimmedSlot, dict, patterns, false) ?? undefined)
+          : lookupExact(trimmedSlot, dict);
+      }
 
       if (pattern.weight <= 12 && !translatedSlot && isUnmappedEnglishPhrase(captured)) {
         rejectedByPhraseGuard = true;

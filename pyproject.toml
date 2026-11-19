@@ -1,6 +1,6 @@
 [project]
-name = "antigravity-zh-tw"
+name = "antigravity-i18n"
 version = "0.1.0"
-description = "Traditional Chinese (zh-TW) localization toolkit for Google Antigravity Desktop"
+description = "Multi-locale runtime localization toolkit for Google Antigravity Desktop"
 requires-python = ">=3.12"
 dependencies = []
